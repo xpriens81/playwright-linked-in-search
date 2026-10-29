@@ -1,0 +1,4 @@
+easyocr==1.7.2
+playwright==1.64.0
+python-dotenv==1.2.4
+cryptography==50.0.2
