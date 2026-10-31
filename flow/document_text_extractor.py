@@ -57,7 +57,7 @@ def extract_image_text(image_path, alt_text="", timeout=30):
                 with Image.open(image_path) as image:
                     rgb = np.array(ImageOps.exif_transpose(image).convert("RGB"))
                     image_array = np.ascontiguousarray(rgb[:, :, ::-1])
-            with warnings.catch_warnings():
+            with warnings.catch_warnings(record=True):
                 warnings.filterwarnings(
                     "ignore",
                     message=(
