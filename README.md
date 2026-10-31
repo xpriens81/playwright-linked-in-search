@@ -97,18 +97,28 @@ The topics and search strings are currently hard-coded in the `queries` mapping 
 ## Initial Setup of Credentials and Key
 - For LinkedIn, you need a valid login credential
 - You can use the `encryption/credential_crypto.py` module to generate a key and encrypt your credentials
-- Ensure you don't git-commit the files .cred and .key
+- Ensure you don't git-commit the files .cred and .key (already part of .gitignore)
 - To generate a key and credential, follow the below steps (Call the crendential_crypto.py module as below)
-  - Update the file generate_cred.py with your LinkedIn cred
-  - Run the file
-  - Once the cred are generate, verify if they are working fine
-  - Remove the cred from the file (ensure the file is added to .gitignore)
+  - Keep an empty .key file
+  - Add a .cred file, with your credentials as
+    - LINKEDIN_USER=<Linked In User Name>
+    - LINKEDIN_PASSWORD=<Linked In Password>
+  - Run the file `credential_crypto` from your IDE
+    - This step will generate a KEY for your credentials, and store in .key file
+    - It'll also encrypt your credentials with the generate KEY and store in .cred file
+    - In case you are behind a PROXY, and need to use PROXY for accessing LinkedIn
+      - Add an ENCODE_PROXY="http://<username>:<password>@your-proxy-url
+      - If this is present in .cred file, then it'll also be encoded with the generated KEY
 
 ## Troubleshooting and privacy
-
 - **Missing-configuration error:** confirm both `LINKEDIN_USER` and `LINKEDIN_PASSWORD` are set in `.env` at the project root.
 - **Chrome launch failure:** install Google Chrome or set `CHROME_PATH` to the correct browser executable.
+- **Image Extraction Failure:** install EasyOCR, and download the models and set `EASYOCR_MODEL_DIR` to the correct model path.
 - **Login or search failure:** inspect the console logs and check whether LinkedIn presented an account verification step or changed its page. Error screenshots may be created under `screenshots/`.
 - **Sensitive files:** `.env`, `linked-in-session.json` (or your configured session filename), and screenshots may contain private account data. Keep them out of source control and share them only after reviewing their contents.
+
+**Note**: 
+- As of now, EasyOcr is supported for Python 3.12.
+- So this code will not work on later versions of Python, till availability of EasyOcr and Pillow for later versions. 
 
 There is no documented automated test suite or test command in the current project.

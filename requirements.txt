@@ -1,4 +1,8 @@
 easyocr==1.7.2
-playwright==1.64.0
+playwright==1.64.1
 python-dotenv==1.2.4
 cryptography==50.0.2
+numpy<2
+pillow==13.0.0
+torch==2.2.2
+torchvision==0.17.2

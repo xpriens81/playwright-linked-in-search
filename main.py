@@ -1,3 +1,5 @@
+import traceback
+
 from common.logger import setup_logger
 from common.config import validate_config
 from common.screenshot import capture_screenshot_on_error
@@ -6,12 +8,19 @@ from flow.question_scraper import scrape_linked_in_with_search_term
 from flow.output_generator import generate_all_outputs
 
 logger = setup_logger(__name__)
+# queries = {
+#     "Playwright": {
+#         "search_term": "Playwright Automation",
+#         "description": "Playwright Interview Questions",
+#         "file": "playwright-interview-questions.md"
+#     },
+#     "SQL": {
+#         "search_term": "SQL Interview Queries",
+#         "description": "SQL Interview Questions",
+#         "file": "sql-interview-questions.md"
+#     }
+# }
 queries = {
-    "Playwright": {
-        "search_term": "Playwright Interview Queries",
-        "description": "Playwright Interview Questions",
-        "file": "playwright-interview-questions.md"
-    },
     "SQL": {
         "search_term": "SQL Interview Queries",
         "description": "SQL Interview Questions",
@@ -46,12 +55,13 @@ def main():
             output_file = queries[key]["file"]
             description = queries[key]["description"]
             search_term = queries[key]["search_term"]
-            logger.info(f"Generating output for '${key}' | Search Term: '${search_term}'")
+            logger.info(f"Generating output for '{key}' | Search Term: '{search_term}'")
             if not generate_all_outputs(question_list, output_file, description):
                 logger.error(f"Failed to write the latest search results for '{description}' under output folder")
-            logger.info(f"Generated output for '${key}' | Search Term: '${search_term}'")
+            logger.info(f"Generated output for '{key}' | Search Term: '{search_term}'")
     except Exception as e:
         logger.error(f"Execution Failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         capture_screenshot_on_error(page, error_type="execution_failure")
     finally:
         close_browser_session(browser, session)

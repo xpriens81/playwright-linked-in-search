@@ -53,7 +53,7 @@ def generate_markdown(questions, title):
 
 def overwrite(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.with_suffix + ".tmp")
+    temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(path)
 

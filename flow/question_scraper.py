@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Any
 from urllib.parse import quote_plus, urlparse
+import traceback
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -14,7 +15,7 @@ from flow.output_generator import OUTPUT_DIR
 
 logger = setup_logger(__name__)
 DOC_STATE = "domcontentloaded"
-POST_SELECTOR = '[role="listing"][componentkey^="update-card-focus"]'
+POST_SELECTOR = '[role="listitem"][componentkey^="update-card-focus"]'
 POST_TEXT_SELECTOR = '[data-testid="expandable-text-box"]'
 POSTS_SELECTOR_RANGE = 60
 MAX_POST_COUNT = 3
@@ -27,6 +28,7 @@ class SearchResults(list):
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "status": "running",
             "warnings": [],
+            "posts": [],
             "stop_reason": ""
         }
 
@@ -80,9 +82,11 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
         try:
             page.locator(POST_SELECTOR).first.wait_for(state="visible", timeout=15000)
         except PlaywrightTimeoutError:
-            empty = page.get_by_text("No results found", exact=True)
+            logger.warning(f"TimedOut: {POST_SELECTOR}")
+            empty = page.get_by_text("No results found", exact=False)
             if empty.count() and empty.first.is_visible():
                 report.update(status="empty", stop_reason="no_results_found")
+                logger.warning(f"No results found; Search results in empty result-set")
                 return results
             raise
         stalled = 0
@@ -93,8 +97,8 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
             for key in keys:
                 if key in seen or len(seen) >= max_posts:
                     continue
-                # re-resolve by actual DOM identtity, not a stake ntg element
-                post = page.locator(f"[role='listener'][componentkey={json.dumps(key)}]")
+                # re-resolve by actual DOM identtity, not a stale ntg element
+                post = page.locator(f"[role='listitem'][componentkey={json.dumps(key)}]")
                 if not post.count():
                     continue
                 record = {
@@ -106,7 +110,7 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
                 }
                 report["posts"].append(record)
                 try:
-                    record["post_url"] = post_text(post)
+                    record["post_url"] = post_url(post)
                     record["description"] = post_text(post)
                     source = {
                         "post_id": key,
@@ -129,7 +133,7 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
                             seen.add(key)
                 except Exception as e:
                     record["errors"].append(f"Post extraction failed: {type(e).__name__}")
-                    logger.warning(f"Post extraction failed: {type(e).__name__}")
+                    logger.warning(f"Post extraction failed: {e}")
             if len(seen) >= max_posts:
                 report["stop_reason"] = "post_limit"
                 break
@@ -138,14 +142,14 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
                 posts.last.scroll_into_view_if_needed(timeout=5000)
             page.mouse.wheel(0, 900)
             try:
-                page.wait_for_function(
-                    '''({selector, seen}) =>
-                    Array.from(document.querySelectorAll(selector)).some(
+                page.wait_for_function('''
+                    ({selector, seen}) => Array.from(document.querySelectorAll(selector)).some(
                     post => !seen.includes(post.getAttribute('componentkey')))
                     ''', arg={'selector': POST_SELECTOR, 'seen': list(seen)}, timeout=5000
                 )
                 stalled = 0
             except PlaywrightTimeoutError:
+                logger.warning(f"TimedOut: During scroll-into-view")
                 stalled += 1
                 if stalled >=3:
                     report["stop_reason"] = "no_new_posts"
@@ -182,7 +186,7 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
                         )
             except Exception as e:
                 record["errors"].append(f"Post extraction failed: {type(e).__name__}")
-                logger.warnings(f"Post extraction failed: {type(e).__name__}")
+                logger.warnings(f"Post extraction failed: {e}")
 
         # Final results and reports
         results[:] = deduplicate_questions(results)
@@ -197,7 +201,8 @@ def scrape_questions(query_key, search_term, max_posts=MAX_POST_COUNT, page=None
         report["status"] = "failed"
         report["stop_reason"] = "search_error"
         report["warnings"].append(f"Search failed: {type(e).__name__}; check login and current DOM locators")
-        logger.error(f"Search failed: {type(e).__name__}; check login and current DOM locators")
+        logger.error(f"Search failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
     logger.info(f"Extracted {len(results)} question candidates from {len(seen)} posts")
     return results

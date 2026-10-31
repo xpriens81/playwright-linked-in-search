@@ -27,10 +27,12 @@ SIGN_IN_LOCATORS = [
 
 # Login Page Locators
 USERNAME_LOCATORS = [
-    {"strategy": "role", "role": "textbox", "name": "Email or phone"}
+    {"strategy": "role", "role": "textbox", "name": "Email or phone"},
+    {"strategy": "label", "name": "Email"}
 ]
 PASSWORD_LOCATORS = [
-    {"strategy": "role", "role": "textbox", "name": "Password"}
+    {"strategy": "role", "role": "textbox", "name": "Password"},
+    {"strategy": "label", "name": "Password"}
 ]
 SUBMIT_LOCATORS = [
     {"strategy": "role", "role": "button", "name": "Sign in"}
@@ -39,6 +41,7 @@ SUBMIT_LOCATORS = [
 # Logged in Page Locators
 LOGGED_IN_LOCATORS = [
     {"strategy": "role", "role": "button", "name": "Start a post"},
+    {"strategy": "role", "role": "combobox", "name": "Search"},
     {"strategy": "placeholder", "name": "Search"}
 ]
 
@@ -80,6 +83,11 @@ def get_proxy_server():
     }
 
 def get_build_locators(root, definition):
+    """
+    Build a locator from editable role, label, placeholder, or CSS data
+    A scope uses the same schema, for example:
+    {"strategy": "role", "role": "navigation", "name": "Primary"}
+    """
     if definition.get('scope') is not None:
         root = get_build_locators(root, definition['scope'])
 
@@ -90,12 +98,17 @@ def get_build_locators(root, definition):
     if strategy == "label":
         return root.get_by_label(definition['name'], exact=exact)
     if strategy == "placeholder":
-        return root.get_by_role(definition['name'], exact=exact)
+        return root.get_by_placeholder(definition['name'], exact=exact)
     if strategy == "css":
         return root.locator(definition['selector'])
-    raise ValueError(f"Unsupported locator strategy: {strategy}")
+    raise ValueError(f"Unsupported locator strategy: {strategy!r}")
 
 def first_visible_locator(page, selectors, timeout=3000, poll_interval=250):
+    """
+    Return a unique, visible, enabled locator and its definition description
+    Mising/disabled targets are retried. Multiple matches are configuration
+    errors: refine the name or scope instead of silently choosing an index
+    """
     deadline = time.monotonic() + (timeout/1000)
     last_error = None
     locators = [(definition, get_build_locators(page, definition)) for definition in selectors]
@@ -108,7 +121,7 @@ def first_visible_locator(page, selectors, timeout=3000, poll_interval=250):
                 if count > 1:
                     raise RuntimeError(
                         f"Ambiguous locator: {definition!r} matched {count} elements. "
-                        "Refine its role/name or add a scope"
+                        "Refine its role/name or add a scope."
                     )
                 if count == 1 and locator.is_visible() and locator.is_enabled():
                     logger.info(f"Using locator: {definition}")
@@ -116,6 +129,8 @@ def first_visible_locator(page, selectors, timeout=3000, poll_interval=250):
             except PlaywrightError as e:
                 last_error = e
                 logger.warning(f"Locator not usable: {definition!r} - {e}")
+
+        page.wait_for_timeout(poll_interval)
 
     if last_error:
         logger.warning(f"No visible locator found. Last error: {last_error}")
@@ -142,7 +157,7 @@ def launch_browser(session):
         logger.info(f"Launching 'Chromium Browser' with custom executable path: %s", CHROME_PATH)
 
     try:
-        return session.chrome.launch(**launch_kwargs)
+        return session.chromium.launch(**launch_kwargs)
     except PlaywrightError:
         raise RuntimeError(f"Browser launch failed; check browser and proxy configurations") from None
 
@@ -224,22 +239,29 @@ def submit_login(page):
             f"Username tried: {USERNAME_LOCATORS} | Password tried: {PASSWORD_LOCATORS}"
         )
 
+    logger.info(
+        f"Login form detected with username and password locators. "
+        f"UserName: {USERNAME_LOCATORS} | "
+        f"Password: {PASSWORD_LOCATORS}"
+    )
+
+    # Decrypt credentials here, for use
+    username = credential_crypto("decrypt", DECRYPTION_KEY, LINKEDIN_USER)
+    password = credential_crypto("decrypt", DECRYPTION_KEY, LINKEDIN_PASSWORD)
+
     # Login in now to LinkedIn
-    page.wait_for_timeout(500)
-    username_locator.click()
-    page.wait_for_timeout(random.randint(1000, 2500))
-    for char in LINKEDIN_USER:
-        username_locator.type(char)
-        page.wait_for_timeout(random.randint(100, 500)) # Human behavior, type with realistic speed
-
-    page.wait_for_timeout(500)
-    password_locator.click()
-    page.wait_for_timeout(random.randint(1000, 2500))
-
-    for char in LINKEDIN_PASSWORD:
-        password_locator.type(char)
-        page.wait_for_timeout(random.randint(100, 500))  # Human behavior, type with realistic speed
-
+    if not username or not password:
+        raise CredentialError("LinkedIn credentials must not decrypt to empty values.")
+    try:
+        for locator, value in ((username_locator, username), (password_locator, password)):
+            page.wait_for_timeout(500)
+            locator.click()
+            page.wait_for_timeout(random.randint(1000, 2500))
+            for char in value:
+                locator.type(char)
+                page.wait_for_timeout(random.randint(100, 250))
+    except PlaywrightError:
+        raise RuntimeError("Unable to enter LinkedIn credentials") from None
 
     logger.info(f"Credentials entered, attempting login now...")
     page.wait_for_timeout(random.randint(1000, 2500))
@@ -251,7 +273,19 @@ def submit_login(page):
             f"Additional verification maybe required"
         )
 
-    logger.info("Submitted login successfully")
+    logger.info(f"Submit button detected with locator: {submit_selector}")
+    page.wait_for_timeout(random.randint(1000, 2500))
+    submit_locator.click()
+    page.wait_for_load_state(DOC_STATE, timeout=30000)
+    page.wait_for_timeout(random.randint(3000, 5000))
+
+    if not is_logged_in(page):
+        raise RuntimeError(
+            "LinkedIn login did not reach an authenticated state. "
+            "Additional verification such as CAPTCHA or MFA maybe be required"
+        )
+
+    logger.info("Login successfull")
 
 def close_browser_session(browser=None, session=None):
     if browser is not None:

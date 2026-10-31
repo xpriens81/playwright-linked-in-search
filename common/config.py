@@ -11,7 +11,7 @@ load_dotenv(PROJECT_ROOT / '.env')
 
 # General properties under .env file
 LINKEDIN_URL = os.getenv("LINKEDIN_URL", "https://in.linkedin.com/")
-LINKED_IN_SEARCH_URL = os.environ.get("LINKED_IN_SEARCH_URL", "https://in.linkedin.com/")
+LINKED_IN_SEARCH_URL = os.environ.get("LINKED_IN_SEARCH_URL", "https://www.linkedin.com/search/results/content/?keywords=")
 SESSION_FILE = os.getenv("SESSION_FILE", "linked-in-session.json")
 CHROME_PATH = os.getenv("CHROME_PATH", "chrome")
 CHROME_USER_DATA_DIR = os.getenv("CHROME_USER_DATA_DIR", None)

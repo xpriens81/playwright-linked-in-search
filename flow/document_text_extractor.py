@@ -6,18 +6,18 @@ import warnings
 from common.config import EASYOCR_MODEL_DIR
 
 QUESTION_START = re.compile(
-    r"^\s*(?:Q(?:uestion)?\s*\d+\s+[:.)-]\s*|\d+\s+[.)]\s+)(.+)",
+    r"^\s*(?:Q(?:uestion)?\s*\d+\s*[:.)-]\s*|\d+\s*[.)]\s+)(.+)",
     re.IGNORECASE
 )
 ANSWER_START = re.compile(
-    r"^\s*(?:Answer|Solution|Ans)\s*[:.\-]\s*(.*)",
+    r"^\s*(?:Answer|Solution|Ans|A)\s*[:.\-]\s*(.*)",
     re.IGNORECASE
 )
 PROMOTIONAL_LINE = re.compile(
     r"^(?:follow (?:me|us|for)|save this|subscribe\b|join (?:my|our)|pdf credit:|#\w)",
     re.IGNORECASE
 )
-QUESTUON_WORDS = re.compile(
+QUESTION_WORDS = re.compile(
     r"\b(?:what|why|how|when|where|which|explain|describe|compare|difference|"
     r"write|find|list|retrieve|calculate|identify|implement|design|query|select|"
     r"join|rank|salary|duplicate|count|group by|window|subquery|cte)\b",
@@ -88,7 +88,13 @@ def extract_image_text(image_path, alt_text="", timeout=30):
     return result
 
 def parse_questions(pages, source):
+    """
+    Keep explicit question blocks; never manufacture answers or truncate SQL
+    Numbered topic headings are candidates, not guaranteed questions. Unstructured
+    OCR remains in the raw report for review rather than becoming a fake Q&A
+    """
     ordered = sorted(pages, key=lambda item: item["page_number"])
+    # Only suppress repeated page-edge lines, not recurring SQL written a question
     edges = Counter()
     for page in ordered:
         lines = [line.strip() for line in page.get("raw_text", "").splitlines() if line.strip()]
@@ -96,7 +102,7 @@ def parse_questions(pages, source):
     repeated = {
         line for line, count in edges.items()
         if count >= 3 and not QUESTION_START.match(line)
-           and not ANSWER_START.match(line) and not QUESTUON_WORDS.search(line)
+           and not ANSWER_START.match(line) and not QUESTION_WORDS.search(line)
     }
     results = []
     current: Optional[Dict[str, Any]] = None
@@ -107,7 +113,7 @@ def parse_questions(pages, source):
         if current is None:
             return
         question = "\n".join(current["question_lines"]).strip()
-        if not ("?" in question or QUESTUON_WORDS.search(question)):
+        if not ("?" in question or QUESTION_WORDS.search(question)):
             return
         results.append({
             "question": question,
@@ -184,7 +190,7 @@ def deduplicate_questions(questions):
             for field in ("question", "answer")
         )
         if key not in unique:
-            unique[key] = dict(question, sourced=list(question.get("srouces, []")))
+            unique[key] = dict(question, sourced=list(question.get("srouces", [])))
         else:
             target = unique[key]
             for source in question.get("sources", []):

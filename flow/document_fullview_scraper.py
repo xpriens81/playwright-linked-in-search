@@ -1,3 +1,14 @@
+"""
+LinkedIn document full-view scraper - Capture pages for later text extraction.
+
+This module handles the full-view document browsing strategy for LinkedIn documents:
+1. Click document to enter full-screen view
+2. Capture the high-quality screenshots of each page
+3. Navigate through pages using full-view pagination
+4. Exit full-view when complete
+5. Report unavailable or incomplete captures without another capture strategy
+"""
+
 import hashlib
 import re
 import time
@@ -5,6 +16,7 @@ import random
 from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect
+import traceback
 
 from common.logger import setup_logger
 
@@ -31,6 +43,7 @@ NAVIGATION_TIMEOUT = 5000
 EXIT_FULL_VIEW_TIMEOUT = 5000
 
 def build_locator(root, definition):
+    # Build a locator from role, label, placeholder or CSS data
     strategy = definition["strategy"]
     exact = definition.get("exact", True)
 
@@ -44,9 +57,10 @@ def build_locator(root, definition):
         return root.locator(definition["selector"])
     raise ValueError(f"Unsupported locator strategy: {strategy!r}")
 
-def find_first_visible_locator(page, locator_definition, timeout=3000):
+def find_first_visible_locator(page, locator_definitions, timeout=3000):
+    # Find first visible and enabled locator from a list of definitions
     deadline = time.monotonic() + (timeout / 1000)
-    locators = [(definition, build_locator(page, locator_definition)) for definition in locator_definition]
+    locators = [(definition, build_locator(page, definition)) for definition in locator_definitions]
 
     while time.monotonic() < deadline:
         for definition, locator in locators:
@@ -64,7 +78,9 @@ def find_first_visible_locator(page, locator_definition, timeout=3000):
 
     return None, None
 
-def find_first_visible_locator_for_paging(page, locator_definitions, timeout=3000):
+def find_first_visible_locator_for_paging(
+        page, locator_definitions, timeout=3000):
+    # Find paging controls inside the viewer containing the navigation slider
     deadline = time.monotonic() + (timeout / 1000)
 
     navigation_section = page.locator(
@@ -84,21 +100,33 @@ def find_first_visible_locator_for_paging(page, locator_definitions, timeout=300
     while time.monotonic() < deadline:
         try:
             viewer_count = viewer.count()
-            for definition, locator in locators:
-                visible_buttons = [
-                    button for button in locator.all()
-                    if button.is_visible()
-                ]
 
-                if len(visible_buttons) > 1:
-                    logger.warning(f"Ambiguous paging button inside viewer. Definition: {definition}")
-                    return None, None
+            if viewer_count > 1:
+                logger.warning(
+                    "Multiple visible document viewers contain navigation sliders"
+                )
+                return None, None
 
-                if len(visible_buttons) == 1:
-                    button = visible_buttons[0]
-                    if button.is_enabled():
-                        logger.info(f"Found viewer paging button: {definition}")
-                        return button, definition
+            if viewer_count == 1:
+                for definition, locator in locators:
+                    visible_buttons = [
+                        button for button in locator.all()
+                        if button.is_visible()
+                    ]
+
+                    if len(visible_buttons) > 1:
+                        logger.warning(
+                            f"Ambiguous paging button inside viewer. Definition: {definition}"
+                        )
+                        return None, None
+
+                    if len(visible_buttons) == 1:
+                        button = visible_buttons[0]
+                        if button.is_enabled():
+                            logger.info(
+                                f"Found viewer paging button: {definition}"
+                            )
+                            return button, definition
         except PlaywrightError as e:
             logger.debug(f"Viewer paging lookup failed: {e}")
 
@@ -107,20 +135,29 @@ def find_first_visible_locator_for_paging(page, locator_definitions, timeout=300
     return None, None
 
 def can_enter_full_view(page, document):
+    # Check if a document supports full-view mode by looking for 'Page X or Y' button
     try:
         document.scroll_into_view_if_needed(timeout=5000)
+
+        # Look for the page button that indicates full-view capability
         page_buttons = document.get_by_role("button", name=re.compile(r"Page\s+\d+\s+of")).all()
+
         if page_buttons:
-            logger.info(f"Document supports full-view mode")
+            logger.info(f"Document supports full-view mode. Found {len(page_buttons)} page button(s)")
             return True
 
-        logger.info(f"Document does not supports full-view mode")
+        logger.info(f"Document does not support full-view mode")
         return False
     except Exception as e:
         logger.warning(f"Error checking full-view compatibility: {e}")
         return False
 
 def enter_full_view_mode(page, document):
+    """
+    Click the document to enter full-view mode
+    Returns:
+         bool: True if successfully entered full-view, False otherwise
+    """
     try:
         document.scroll_into_view_if_needed(timeout=5000)
         page.wait_for_timeout(500)
@@ -130,6 +167,7 @@ def enter_full_view_mode(page, document):
         if not page_button.count():
             logger.warning(f"Page button not found; cannot enter full-view")
             return False
+
         if not page_button.is_visible():
             logger.warning(f"Page button not visible; cannot enter full-view")
             return False
@@ -148,6 +186,7 @@ def enter_full_view_mode(page, document):
         if exit_button:
             logger.info(f"Successfully entered full-view mode")
             return True
+
         logger.warning(f"Could not confirm the full-view mode")
         return False
     except PlaywrightTimeoutError as e:
@@ -158,14 +197,16 @@ def enter_full_view_mode(page, document):
         return False
 
 def get_full_view_page_info(page):
-    page_counter_pattern = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*")
+    # Read current/total pages from the active viewer paragraph
+    page_counter_pattern = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
 
     try:
         navigation_section = page.locator(
             FULL_VIEW_PAGE_SLIDER_PATTERN
         ).filter(has=page.get_by_role("slider"))
+
         viewer = page.locator(
-            FULL_VIEW_PAGE_VIEWER_PATTERN
+            FULL_VIEW_PAGE_VIEWER_PATTERN + ":visible"
         ).filter(has=navigation_section)
 
         viewer_count = viewer.count()
@@ -174,12 +215,12 @@ def get_full_view_page_info(page):
                            f" found {viewer_count}. Cannot read page info.")
             return None
 
-        page_counter = viewer,logger("p:visible").filter(
+        page_counter = viewer.locator("p:visible").filter(
             has_text=page_counter_pattern
         )
 
         # Wait for the page counter to be visible and extract the current and total pages
-        expect(page_counter).to_be_visible(timeout=PAGE_LOAD_TIMEOUT)
+        page_counter.wait_for(state="visible", timeout=PAGE_LOAD_TIMEOUT)
         counter_text = page_counter.inner_text(timeout=PAGE_LOAD_TIMEOUT).strip()
         match = page_counter_pattern.fullmatch(counter_text)
         if not match:
@@ -192,10 +233,10 @@ def get_full_view_page_info(page):
             logger.warning(f"Invalid page numbers: current={current_page}, total={total_pages}")
             return None
 
-        next_button = find_first_visible_locator_for_paging(
+        next_button, _ = find_first_visible_locator_for_paging(
             page, FULL_VIEW_NEXT_BUTTON_LOCATORS, timeout=1000
         )
-        prev_button = find_first_visible_locator_for_paging(
+        prev_button, _ = find_first_visible_locator_for_paging(
             page, FULL_VIEW_PREV_BUTTON_LOCATORS, timeout=1000
         )
         info = {
@@ -204,16 +245,24 @@ def get_full_view_page_info(page):
             "has_next": next_button is not None and next_button.is_enabled(),
             "has_prev": prev_button is not None and prev_button.is_enabled()
         }
-        logger.info(f"Page Info. Current: {current_page}, Total: {total_pages}, "
-                    f"Has Next: {info['has_next']}, Has Prev: {info['has_prev']}")
+        logger.info(
+            f"Page Info. Current: {current_page}, Total: {total_pages}, "
+            f"Has Next: {info['has_next']}, Has Prev: {info['has_prev']}"
+        )
         return info
     except PlaywrightError as e:
         logger.error(f"Error reading full-view page info: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def capture_full_view_screenshot(page, page_number, assets_dir, document_key):
+    """
+    Capture a screenshot of the current full-view page
+    Returns:
+         dict: {"page_number": int, "image_path": str, ...} or None on failure
+    """
     try:
-        filename = Path(assets_dir) / f"{document_key}-fv-page-{page_number}.png"
+        filename = Path(assets_dir) / f"{document_key}-fullview-page-{page_number}.png"
         Path(assets_dir).mkdir(parents=True, exist_ok=True)
 
         # Capture the full view page screenshot
@@ -237,11 +286,13 @@ def capture_full_view_screenshot(page, page_number, assets_dir, document_key):
         return None
 
 def navigate_full_view_next_page(page):
-    counter_pattern = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*")
+    # Click Next and confirm that the document counter advances
+    counter_pattern = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
     try:
         navigation_section = page.locator(
             FULL_VIEW_PAGE_SLIDER_PATTERN
         ).filter(has=page.get_by_role("slider"))
+
         viewer = page.locator(
             FULL_VIEW_PAGE_VIEWER_PATTERN + ":visible"
         ).filter(has=navigation_section)
@@ -251,7 +302,7 @@ def navigate_full_view_next_page(page):
         counter = viewer.locator("p:visible").filter(
             has_text=counter_pattern
         )
-        expect(counter).to_have_current_page(1, timeout=PAGE_LOAD_TIMEOUT)
+        expect(counter).to_have_count(1, timeout=PAGE_LOAD_TIMEOUT)
 
         next_button, _ = find_first_visible_locator_for_paging(
             page, FULL_VIEW_NEXT_BUTTON_LOCATORS,
@@ -272,7 +323,7 @@ def navigate_full_view_next_page(page):
 
         current_page = int(match.group(1))
         total_pages = int(match.group(2))
-        if not 1 <= current_page <= total_pages:
+        if not 1 <= current_page < total_pages:
             logger.info(f"Cannot advance from counter: {counter_text!r}")
             return False
 
@@ -296,9 +347,15 @@ def navigate_full_view_next_page(page):
         return True
     except (PlaywrightError, AssertionError) as e:
         logger.error(f"Error navigating to next page in full-view: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 def exit_full_view_mode(page):
+    """
+    Exit the full-view document viewer
+    Returns:
+         bool: True if successfully exited, False otherwise
+    """
     try:
         exit_button, _ = find_first_visible_locator(
             page, FULL_VIEW_EXIT_BUTTON_LOCATORS, timeout=EXIT_FULL_VIEW_TIMEOUT
@@ -312,6 +369,7 @@ def exit_full_view_mode(page):
 
         logger.info(f"Clicking exit full-view button...")
         exit_button.click(timeout=EXIT_FULL_VIEW_TIMEOUT)
+
         page.wait_for_timeout(500)
         logger.info(f"Successfully exited full-view mode")
         return True
@@ -322,12 +380,24 @@ def exit_full_view_mode(page):
 def scrape_document_full_view(
         page, document,
         assets_dir, max_pages=100, timeout_seconds=120):
+    """
+    Scrape a document using full-view mode
+
+    This is the main orchestration function that:
+    1. Enters the full-view mode
+    2. Captures the screenshots of each page
+    3. Navigates through pages
+    4. Exits full-view when complete, leaving OCR to the question scraper
+
+    Returns:
+         dict: Capture report, including explicit failures when full-view is unavailable
+    """
     document_id = document.get_attribute("componentkey") or "unknown-document"
     key = hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16]
 
     report = {
         "document_id": document_id,
-        "strategy": "full-view",
+        "strategy": "fullview",
         "expected_pages": 0,
         "captured_pages": 0,
         "pages": [],
@@ -417,7 +487,7 @@ def scrape_document_full_view(
             # Navigate to the next page if possible
             if current_page < total_pages:
                 if not navigate_full_view_next_page(page):
-                    logger.info(f"No more pages avaulable after page {current_page}")
+                    logger.info(f"No more pages available after page {current_page}")
                     report["stop_reason"] = "end_of_document"
                     break
 
